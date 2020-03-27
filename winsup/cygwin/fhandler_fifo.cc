@@ -547,6 +547,14 @@ fhandler_fifo::open (int flags, mode_t)
       if (!(sync_thr = create_event ()))
 	goto err_close_cancel_evt;
       new cygthread (fifo_reader_thread, this, "fifo_reader", sync_thr);
+      reader_lock ();
+      if (get_nreaders () > 0)
+	{
+	  set_errno (ENOTSUP);
+	  reader_unlock ();
+	  goto err_cancel_frt;
+	}
+      reader_unlock ();
 
       /* If we're a duplexer, we need a handle for writing. */
       if (duplexer)
@@ -572,6 +580,9 @@ fhandler_fifo::open (int flags, mode_t)
       else if (!wait (write_ready))
 	goto err_cancel_frt;
 
+      reader_lock ();
+      inc_nreaders ();
+      reader_unlock ();
       goto success;
     }
 
@@ -613,6 +624,10 @@ success:
   return 1;
 err_cancel_frt:
   cancel_reader_thread ();
+  reader_lock ();
+  if (get_nreaders () == 0)
+    ResetEvent (read_ready);
+  reader_unlock ();
   NtClose (sync_thr);
 err_close_cancel_evt:
   NtClose (cancel_evt);
@@ -963,11 +978,10 @@ fhandler_fifo::close ()
       for (int i = 0; i < nhandlers; i++)
 	fc_handler[i].close ();
       fifo_client_unlock ();
-      if (read_ready)
-	/* FIXME: There could be several readers open because of
-	   dup/fork/exec; we should only reset read_ready when the last
-	   one closes. */
+      reader_lock ();
+      if (read_ready && dec_nreaders () == 0)
 	ResetEvent (read_ready);
+      reader_unlock ();
       if (shmem)
 	NtUnmapViewOfSection (NtCurrentProcess (), shmem);
       if (shmem_handle)
@@ -1056,6 +1070,9 @@ fhandler_fifo::dup (fhandler_base *child, int flags)
 	  goto err_close_handlers;
 	}
       fifo_client_unlock ();
+      reader_lock ();
+      inc_nreaders ();
+      reader_unlock ();
       new cygthread (fifo_reader_thread, fhf, "fifo_reader", fhf->sync_thr);
     }
   return 0;
@@ -1093,6 +1110,9 @@ fhandler_fifo::fixup_after_fork (HANDLE parent)
 	api_fatal ("Can't create reader thread cancel event during fork, %E");
       if (!(sync_thr = create_event ()))
 	api_fatal ("Can't create reader thread sync event during fork, %E");
+      reader_lock ();
+      inc_nreaders ();
+      reader_unlock ();
       new cygthread (fifo_reader_thread, this, "fifo_reader", sync_thr);
     }
 }
