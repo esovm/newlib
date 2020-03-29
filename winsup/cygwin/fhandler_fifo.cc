@@ -312,10 +312,33 @@ fhandler_fifo::thread_func ()
 
   while (1)
     {
-	  /* At the beginning of the loop, all client handlers are
-	     in the fc_connected or fc_invalid state. */
+      fifo_reader_id_t cur_owner;
 
-	  /* Delete any invalid clients. */
+      owner_lock ();
+      cur_owner = get_owner ();
+      /* Has the owner been set yet? */
+      if (!cur_owner)
+	{
+	  set_owner (me);
+	  owner_unlock ();
+	  continue;
+	}
+      /* If there's an owner but it's not me, wait until there's
+	 something for me to do.  For now, I'll just wait until I'm
+	 canceled. */
+      else if (cur_owner != me)
+	{
+	  owner_unlock ();
+	  WaitForSingleObject (cancel_evt, INFINITE);
+	  goto canceled;
+	}
+      /* I'm the owner.  Listen for client connections. */
+      else
+	{
+	  owner_unlock ();
+
+	  /* All client handlers are in the fc_connected or fc_invalid
+	     state.  Delete any invalid clients. */
 	  fifo_client_lock ();
 	  int i = 0;
 	  while (i < nhandlers)
@@ -354,10 +377,9 @@ fhandler_fifo::thread_func ()
 		  status = STATUS_THREAD_IS_TERMINATING;
 		  break;
 		default:
-		  __seterrno ();
-		  debug_printf ("WaitForMultipleObjects failed, %E");
-		  status = STATUS_THREAD_IS_TERMINATING;
-		  break;
+		  debug_printf ("WFMO failed, %E");
+		  delete_client_handler (nhandlers - 1);
+		  continue;	/* ?? */
 		}
 	    }
 	  HANDLE ph = NULL;
@@ -398,19 +420,17 @@ fhandler_fifo::thread_func ()
 		}
 	      if (ph)
 		NtClose (ph);
-	      fifo_client_unlock ();
-	      goto canceled;
+	      break;
 	    default:
 	      debug_printf ("NtFsControlFile status %y", status);
-	      __seterrno_from_nt_status (status);
 	      delete_client_handler (nhandlers - 1);
-	      fifo_client_unlock ();
-	      goto canceled;
+	      break;		/* ?? */
 	    }
 	  fifo_client_unlock ();
 	  ResetEvent (listening_evt);
 	  if (cancel)
 	    goto canceled;
+	}
     }
 canceled:
   if (conn_evt)
@@ -830,6 +850,15 @@ fhandler_fifo::raw_read (void *in_ptr, size_t& len)
   if (!len)
     return;
 
+  owner_lock ();
+  if (get_owner () != me)
+    {
+      owner_unlock ();
+      set_errno (ENOTSUP);
+      goto errout;
+    }
+  owner_unlock ();
+
   while (1)
     {
       if (hit_eof ())
@@ -987,6 +1016,10 @@ fhandler_fifo::close ()
       if (read_ready && dec_nreaders () == 0)
 	ResetEvent (read_ready);
       reader_unlock ();
+      owner_lock ();
+      if (get_owner () == me)
+	set_owner (null_fr_id);
+      owner_unlock ();
       if (shmem)
 	NtUnmapViewOfSection (NtCurrentProcess (), shmem);
       if (shmem_handle)

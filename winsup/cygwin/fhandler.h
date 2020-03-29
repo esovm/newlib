@@ -1319,6 +1319,8 @@ class fifo_shmem_t
 {
   LONG _nreaders;
   af_unix_spinlock_t _reader_lock;
+  fifo_reader_id_t _owner;
+  af_unix_spinlock_t _owner_lock;
 
  public:
   LONG get_nreaders () const { return _nreaders; }
@@ -1326,6 +1328,15 @@ class fifo_shmem_t
   LONG dec_nreaders () { return InterlockedDecrement (&_nreaders); }
   void reader_lock () { _reader_lock.lock (); }
   void reader_unlock () { _reader_lock.unlock (); }
+  void owner_lock () { _owner_lock.lock (); }
+  void owner_unlock () { _owner_lock.unlock (); }
+  fifo_reader_id_t get_owner () const { return _owner; }
+  fifo_reader_id_t set_owner (fifo_reader_id_t fr_id)
+  {
+    fifo_reader_id_t old_id = _owner;
+    _owner = fr_id;
+    return old_id;
+  }
 
   friend class fhandler_fifo;
 };
@@ -1374,11 +1385,16 @@ public:
   void fifo_client_lock () { _fifo_client_lock.lock (); }
   void fifo_client_unlock () { _fifo_client_lock.unlock (); }
 
+  void owner_lock () { shmem->owner_lock (); }
+  void owner_unlock () { shmem->owner_unlock (); }
   void reader_lock () { shmem->reader_lock (); }
   void reader_unlock () { shmem->reader_unlock (); }
   LONG get_nreaders () const { return shmem->get_nreaders (); }
   LONG inc_nreaders () { return shmem->inc_nreaders (); }
   LONG dec_nreaders () { return shmem->dec_nreaders (); }
+  fifo_reader_id_t get_owner () const { return shmem->get_owner (); }
+  fifo_reader_id_t set_owner (fifo_reader_id_t fr_id)
+    { return shmem->set_owner (fr_id); }
   fifo_reader_id_t get_me () const { return me; }
 
   int open (int, mode_t);
