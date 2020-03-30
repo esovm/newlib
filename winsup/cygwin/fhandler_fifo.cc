@@ -1078,12 +1078,24 @@ fhandler_fifo::dup (fhandler_base *child, int flags)
     }
   if (reader)
     {
-      if (fhf->reopen_shmem () < 0)
-	goto err;
-      if (!(fhf->cancel_evt = create_event ()))
+      if (!DuplicateHandle (GetCurrentProcess (), shmem_handle,
+			    GetCurrentProcess (), &fhf->shmem_handle,
+			    0, !(flags & O_CLOEXEC), DUPLICATE_SAME_ACCESS))
 	{
 	  __seterrno ();
 	  goto err_close_write_ready;
+	}
+      if (fhf->reopen_shmem () < 0)
+	goto err_close_shmem_handle;
+      if (!(fhf->listening_evt = create_event ()))
+	{
+	  __seterrno ();
+	  goto err_close_shmem;
+	}
+      if (!(fhf->cancel_evt = create_event ()))
+	{
+	  __seterrno ();
+	  goto err_close_listening_evt;
 	}
       if (!(fhf->sync_thr = create_event ()))
 	{
@@ -1121,6 +1133,12 @@ err_close_handlers:
     fhf->fc_handler[j].close ();
 err_close_cancel_evt:
   NtClose (fhf->cancel_evt);
+err_close_listening_evt:
+  NtClose (listening_evt);
+err_close_shmem:
+  NtUnmapViewOfSection (NtCurrentProcess (), fhf->shmem);
+err_close_shmem_handle:
+  NtClose (fhf->shmem_handle);
 err_close_write_ready:
   NtClose (fhf->write_ready);
 err_close_read_ready:
