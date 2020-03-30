@@ -1134,7 +1134,7 @@ err_close_handlers:
 err_close_cancel_evt:
   NtClose (fhf->cancel_evt);
 err_close_listening_evt:
-  NtClose (listening_evt);
+  NtClose (fhf->listening_evt);
 err_close_shmem:
   NtUnmapViewOfSection (NtCurrentProcess (), fhf->shmem);
 err_close_shmem_handle:
